@@ -1,0 +1,165 @@
+#!python
+import argparse
+import json
+import logging
+import os
+import sys
+
+from datetime import datetime
+from bloc.generator import gen_bloc_for_users
+from bloc.subcommands import run_subcommands
+
+from bloc.util import dumpJsonToFile
+from bloc.util import genericErrorInfo
+from bloc.util import setLogDefaults
+from bloc.util import setLoggerDets
+
+logger = logging.getLogger('bloc.bloc')
+
+def get_generic_args(subcommand):
+
+    parser = argparse.ArgumentParser(formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=30), description='Behavioral Language for Online Classification (BLOC) command-line tool')
+    parser.add_argument('screen_names_or_ids', nargs='+', help='Twitter screen_name(s) or user_id(s) to generate BLOC. If user_ids set --no-screen-name.')
+
+    #groups
+    parser.add_argument('--bearer-token', default='', help='Twitter v2 API bearer token to access API')
+
+    parser.add_argument('--access-token', default='', help='Twitter v1.1 API access-token')
+    parser.add_argument('--access-token-secret', default='', help='Twitter v1.1 API access-token-secret')
+    parser.add_argument('--consumer-key', default='', help='Twitter v1.1 API consumer-key')
+    parser.add_argument('--consumer-secret', default='', help='Twitter v1.1 API consumer-secret')
+
+    parser.add_argument('--blank-mark', type=int, default=60, help='Actions done under --blank-mark (in seconds) are assigned blank prefix.')
+    parser.add_argument('--minute-mark', type=int, default=5, help='Actions done under --minute-mark are assigned the □ prefix.')
+
+    parser.add_argument('--segmentation-type', default='week_number', choices=['week_number', 'day_of_year_bin', 'yyyy-mm-dd'], help='How to segment BLOC string. Segments of strings are separated by |. If day_of_year_bin selected, use --days-segment-count to change the number of days marking segment boundaries.')
+    parser.add_argument('--days-segment-count', type=int, default=1, help='For --segmentation-type=day_of_year_bin. This value determines the number of days marking segment boundaries.')
+
+    if( subcommand != '' ):
+        parser.add_argument('--account-class', default='', help='Class labels (e.g., bot or cyborgs or humans) of accounts')
+        parser.add_argument('--account-src', default='', help='Origin of accounts')
+        
+        parser.add_argument('--change-mean', type=float, help='Empirical mean cosine similarity across BLOC segments.')
+        parser.add_argument('--change-stddev', type=float, help='Empirical standard deviation across BLOC segments.')
+        parser.add_argument('--change-zscore-threshold', type=float, default=1.5, help='Number of standard deviations (z-score) a similarity value has to exceed to be considered significant.')
+
+        parser.add_argument('--sim-no-summary', action='store_true', help='For BLOC sim subcommand, do not present feature importance and cosine sim of user pairs. Default is False (summary is active).')
+
+        parser.add_argument('--fold-start-count', type=int, default=4, help='For word models, value marks maximum threshold words must reach before truncation.')
+        parser.add_argument('--keep-tf-matrix', action='store_true', help='Keep or do not keep tf_matrix. Default is False.')
+        parser.add_argument('--ngram', type=int, default=1, help='n-gram for tokenization BLOC string.')
+        parser.add_argument('--no-sort-action-words', action='store_true', help='For word models, do not sort action words. Default is False (action words sorted).')
+        parser.add_argument('--set-top-ngrams', action='store_true', help='Generate top BLOC n-grams per user or across all users. If True, --keep-tf-matrix must be True. Default is False.')
+        parser.add_argument('--tf-matrix-norm', default='', choices=['', 'l1', 'max'], help='Norm to use for normalizing TF matrix (see sklearn.preprocessing.normalize(). Blank means tf_matrix_normalized is not needed.')
+        parser.add_argument('--token-pattern', default='word', help='Regular expression or {bigram, word} that defines word boundaries. Regex for bigram: "([^ |()*])". Regex for word: "[^□⚀⚁⚂⚃⚄⚅. |()*]+|[□⚀⚁⚂⚃⚄⚅.]". ')
+        parser.add_argument('--top-ngrams-add-all-docs', action='store_true', help='Generate top BLOC n-grams across all users. If True, --keep-tf-matrix must be True. Default is False.')
+
+    #alphabetical
+    parser.add_argument('--ansi-code', default='91m', help='Color code for BLOC action string. Blank means no color.')
+    parser.add_argument('--bloc-alphabets', default=['action', 'change', 'content_syntactic', 'content_semantic_entity', 'content_semantic_sentiment'], nargs='+', choices=['action', 'change', 'content_syntactic', 'content_syntactic_with_pauses', 'content_semantic_entity', 'content_semantic_sentiment',  'action_content_syntactic'], help='BLOC alphabets to draw letters from.')    
+    parser.add_argument('--bloc-symbols-file', help='User-supplied JSON file containing BLOC alphabet symbols.')
+
+    parser.add_argument('--cache-path', default='', help='Path to save timeline tweets.')
+    parser.add_argument('--cache-read', action='store_true', help='Attempt to read timeline tweets from cache-path.')
+    parser.add_argument('--cache-write', action='store_true', help='Write timeline tweets to cache-path.')
+
+    parser.add_argument('--following-lookup', action='store_true', help='Check following (distinguish between friend/non-friend).')
+    parser.add_argument('--keep-tweets', action='store_true', help='When writing BLOC JSON output, keep tweets, default is False.')
+    parser.add_argument('--keep-bloc-segments', action='store_true', help='When writing BLOC JSON output, keep bloc segments, default is False.')
+
+    parser.add_argument('--log-file', default='', help='Log output filename')
+    parser.add_argument('--log-format', default='', help='Log print format, see: https://docs.python.org/3/howto/logging-cookbook.html')
+    parser.add_argument('--log-level', default='info', choices=['critical', 'error', 'warning', 'info', 'debug', 'notset'], help='Log level')
+
+    parser.add_argument('-m', '--max-pages', type=int, default=1, help='The maximum number of user Timeline pages (20 tweets/page) to extract tweets.')
+    parser.add_argument('--max-results', type=int, default=100, help='For Twitter v2, maximum number of tweets to return per request.')
+    parser.add_argument('--no-screen-name', action='store_true', help='"screen_names_or_ids" contains user_ids and not screen_names')
+    parser.add_argument('--no-sleep', action='store_true', help='Do not sleep when extracting tweets: switch off rate limiting. Default is False')
+    parser.add_argument('-o', '--output', help='Output path')
+
+    parser.add_argument('--timeline-startdate', default='', help='Extract tweets published from --timeline-startdate in UTC (YYYY-MM-DD HH:MM:SS).')
+    parser.add_argument('--timeline-scroll-by-hours', type=int, help='Starting at --timeline-startdate, scroll up (positive hours) or down (negative hours) timeline by this value to retrieve timeline tweets.')    
+    parser.add_argument('--time-function', default='f2', choices=['f1', 'f2'], help='The pause function to use to generate pause symbols. f1 is non-granular, f2 is.')
+
+    return parser
+
+def proc_req(args, subcommand):
+
+    params = vars(args)
+    
+    if( params['timeline_startdate'] != '' ):
+        try:
+            datetime.strptime(params['timeline_startdate'], '%Y-%m-%d %H:%M:%S')
+        except:
+            logger.error('\nError parsing datetime: ' + params['timeline_startdate'] + ' while expecting %Y-%m-%d %H:%M:%S')
+            return
+
+    if( params['segmentation_type'] != 'day_of_year_bin' ):
+        #in generator.py.add_bloc_sequences(), if days_segment_count > 0, day_of_year_bin segmentation type is activated irrespective of the value of segmentation_type,
+        #so set days_segment_count to -1 when segmentation_type is not day_of_year_bin to avoid switching it on.
+        params['days_segment_count'] = -1
+
+    
+    params['sort_action_words'] = False if params.get('no_sort_action_words', False) is True else True
+    params['keep_bloc_segments'] = True if subcommand == 'change' else params.get('keep_bloc_segments', False)
+
+    setLogDefaults( params )
+    setLoggerDets( logger, params['log_dets'] )
+
+    return gen_bloc_for_users( **params )
+
+def write_output(output, payload):
+
+    try:
+        if( isinstance(payload, list) ):
+            with open(output, 'w') as outfile:
+                for u in payload:
+                    u['self'] = ' '.join(sys.argv)
+                    outfile.write( json.dumps(u, ensure_ascii=False) + '\n' )
+
+            print('\nwrite_output(): wrote:', output)
+        else:
+            payload['self'] = ' '.join(sys.argv)
+            dumpJsonToFile(output, payload, indentFlag=False)
+    except:
+        genericErrorInfo()
+
+def main():
+
+    subcommand = ''
+    if( len(sys.argv) > 1 ):
+        
+        if( sys.argv[1] == '-v' or sys.argv[1] == '--version' ):
+            
+            from bloc.version import __appversion__
+            print(__appversion__)
+            return
+
+        bloc_subcommand = ['top_ngrams', 'sim', 'change']
+        if( sys.argv[1] in bloc_subcommand ):
+            subcommand = sys.argv[1]
+            del sys.argv[1]
+
+    parser = get_generic_args(subcommand)
+    args = parser.parse_args()
+    args.subcommand = subcommand
+    
+    bloc_payload = proc_req(args, subcommand)
+    all_users_bloc = bloc_payload.get('all_users_bloc', [])
+    if( subcommand != '' ):
+        all_users_bloc = run_subcommands(args, subcommand, all_users_bloc)
+
+    if( args.output is not None ):
+        write_output( args.output, all_users_bloc )
+
+if __name__ == '__main__':
+    main()
+    '''
+        Examples:
+        $ bloc -m 4 -o osome_bloc.json --keep-tweets --consumer-key="foo" --consumer-secret="foo" --access-token="bar" --access-token-secret="bar" OSoMe_IU
+        $ bloc -m 4 -o osome_bloc.json --keep-tweets --bearer-token="foo" OSoMe_IU
+        $ bloc sim -o accounts_sim.jsonl --token-pattern=word --bloc-alphabets action content_syntactic change -m 4 --bearer-token="foo" FoxNews CNN POTUS SpeakerPelosi GOPLeader GenerateACat storygraphbot
+        $ bloc top_ngrams -o top_bloc_words.json --token-pattern=word --bloc-alphabets action content_syntactic change -m 4 --bearer-token="foo" FoxNews CNN POTUS SpeakerPelosi GOPLeader GenerateACat storygraphbot
+        $ bloc change --no-sort-action-words --bloc-alphabets action -m 4 --bearer-token="$BEARER_TOKEN" OSoMe_IU
+
+    '''
