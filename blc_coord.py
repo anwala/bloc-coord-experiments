@@ -106,7 +106,7 @@ def proc_req(args):
     
     print('Runtime for extracting tweets:', runtime_details['gen_tweets_total_seconds'])
     print('Runtime for generating BLOC:', runtime_details['gen_bloc_total_seconds'])
-    print('Runtime for pairwise cosine sime:', pairwise_comp_time)
+    print('Runtime for pairwise cosine sim:', pairwise_comp_time)
 
     print('\nTotal users:', len(gen_bloc_params['screen_names_or_ids']) )
     print('Total tweets:', total_tweets)
