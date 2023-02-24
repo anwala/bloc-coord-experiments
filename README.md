@@ -1,4 +1,4 @@
-# BLOC Change Experiments
+# BLOC Coordination Experiments
 
 This repository hosts a prototype for coordination analyses using [BLOC](https://github.com/anwala/bloc).
 
