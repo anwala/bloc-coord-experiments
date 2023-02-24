@@ -15,7 +15,7 @@ def get_generic_args():
     parser = argparse.ArgumentParser(formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=30), description='Behavioral Language for Online Classification (BLOC) command-line tool')
     parser.add_argument('query', help='Query to issue to Twitter search')
 
-    parser.add_argument('--bearer-token', default='', help='Twitter v2 API bearer token to access API')
+    parser.add_argument('--bearer-token', required=True, help='Twitter v2 API bearer token to access API')
     parser.add_argument('-m', '--max-users', type=int, default=10, help='Maximum number of users to generate BLOC and run pairwise BLOC cosine sim. analysis. -1 for no restriction.')
     parser.add_argument('--silent', action='store_true', help='Do not print progress')
 
@@ -112,7 +112,12 @@ def proc_req(args):
     print('Total tweets:', total_tweets)
     print('Total pairs:', len(pairwise_sim_report))
     
-    print('\nWrote pairwise_sim_report.json')
+    pairwise_sim_report = sorted(pairwise_sim_report, key=lambda x: x['sim'], reverse=True)
+    print('\nWrote pairwise_sim_report.json. Preview of first 10 most similar user pairs.')
+    for i in range(len(pairwise_sim_report[:10])):
+        u_pair = pairwise_sim_report[i]
+        print('\t{:02d}. {:.3f} {}, {}'.format( i+1, u_pair['sim'], u_pair['user_pair'][0], u_pair['user_pair'][1]) )
+
     dumpJsonToFile('pairwise_sim_report.json', pairwise_sim_report)
 
 def main():
